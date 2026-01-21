@@ -1,9 +1,9 @@
 
 import React, { useState } from 'react';
 import { ProposalData, Category } from './types';
-import { FileUploader } from './components/FileUploader';
-import { ProposalEditor } from './components/ProposalEditor';
-import { ProposalPreview } from './components/ProposalPreview';
+import { FileUploader } from './components/FileUploader.tsx';
+import { ProposalEditor } from './components/ProposalEditor.tsx';
+import { ProposalPreview } from './components/ProposalPreview.tsx';
 import { parseEstimate, EstimatePart } from './services/geminiService';
 import { Flame } from 'lucide-react';
 
@@ -44,7 +44,6 @@ const App: React.FC = () => {
       const parsed = await parseEstimate(smetaParts);
       
       const formattedData: ProposalData = {
-        // Form metadata overrides AI parsing if provided
         clientName: metadata.clientName || parsed.clientName || '',
         address: metadata.address || parsed.address || '',
         paymentTerms: metadata.paymentTerms || '',
@@ -75,7 +74,7 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50/50">
+    <div className="min-h-screen bg-gray-50/50 font-inter">
       {view !== AppView.PREVIEW && (
         <header className="bg-white/80 backdrop-blur-xl border-b border-gray-100 py-3 px-10 mb-8 sticky top-0 z-40">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
@@ -84,7 +83,7 @@ const App: React.FC = () => {
                 <Flame className="w-4 h-4 text-orange-500 fill-orange-500" />
               </div>
               <div>
-                <h1 className="text-sm font-black text-gray-900 leading-none tracking-tight uppercase">Fireplace Pro</h1>
+                <h1 className="text-sm font-semibold text-gray-900 leading-none tracking-tight uppercase">Fireplace Pro</h1>
                 <p className="text-[8px] text-gray-400 font-bold uppercase tracking-[0.2em] mt-0.5">Automated Engine</p>
               </div>
             </div>
