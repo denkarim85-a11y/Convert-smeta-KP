@@ -1,9 +1,9 @@
 
 import React, { useState } from 'react';
 import { ProposalData, Category } from './types';
-import { FileUploader } from './components/FileUploader.tsx';
-import { ProposalEditor } from './components/ProposalEditor.tsx';
-import { ProposalPreview } from './components/ProposalPreview.tsx';
+import { FileUploader } from './components/FileUploader';
+import { ProposalEditor } from './components/ProposalEditor';
+import { ProposalPreview } from './components/ProposalPreview';
 import { parseEstimate, EstimatePart } from './services/geminiService';
 import { Flame } from 'lucide-react';
 
