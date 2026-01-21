@@ -1,0 +1,461 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fireplace Pro — Генератор КП</title>
+    
+    <!-- Стили -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Библиотеки -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; scroll-behavior: smooth; }
+        .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); }
+        @media print {
+            .no-print { display: none !important; }
+            body { background: white !important; padding: 0 !important; }
+            .print-page { 
+                page-break-after: always; 
+                margin: 0 !important; 
+                padding: 40px !important; 
+                box-shadow: none !important; 
+                width: 210mm;
+                height: 297mm;
+            }
+        }
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #f97316;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "lucide-react": "https://esm.sh/lucide-react@^0.562.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3"
+  }
+}
+</script>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useCallback, useEffect, useRef } from 'https://esm.sh/react@18.2.0';
+        import ReactDOM from 'https://esm.sh/react-dom@18.2.0/client';
+        import { 
+            Flame, Upload, Image as ImageIcon, Ruler, X, Loader2, 
+            Camera, Hammer, MapPin, CreditCard, MessageSquare, Truck, 
+            Package, UserCircle, Scissors, Check, Trash2, Printer, ArrowLeft,
+            ChevronRight, FileText, Layout
+        } from 'https://esm.sh/lucide-react@0.263.1';
+        import Cropper from 'https://esm.sh/react-easy-crop@5.2.0?deps=react@18.2.0,react-dom@18.2.0';
+        import { GoogleGenAI, Type } from 'https://esm.sh/@google/genai@1.38.0';
+
+        const CATEGORIES = {
+            FIREPLACE: { label: 'Топка и портал', icon: Flame, color: 'orange' },
+            CHIMNEY: { label: 'Дымоход', icon: Ruler, color: 'blue' },
+            MATERIALS: { label: 'Материалы', icon: Package, color: 'green' },
+            LABOR: { label: 'Монтаж', icon: Hammer, color: 'purple' },
+            LOGISTICS: { label: 'Логистика', icon: Truck, color: 'gray' }
+        };
+
+        // Вспомогательная функция для обрезки
+        async function getCroppedImg(imageSrc, pixelCrop) {
+            const image = new Image();
+            image.src = imageSrc;
+            await new Promise(r => image.onload = r);
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = pixelCrop.width;
+            canvas.height = pixelCrop.height;
+            ctx.drawImage(
+                image, 
+                pixelCrop.x, pixelCrop.y, pixelCrop.width, pixelCrop.height, 
+                0, 0, pixelCrop.width, pixelCrop.height
+            );
+            return canvas.toDataURL('image/jpeg', 0.85);
+        }
+
+        const CropModal = ({ isOpen, src, onCrop, onCancel, aspect = 16/9 }) => {
+            const [crop, setCrop] = useState({ x: 0, y: 0 });
+            const [zoom, setZoom] = useState(1);
+            const [pixels, setPixels] = useState(null);
+            
+            if (!isOpen) return null;
+
+            return (
+                <div className="fixed inset-0 z-[100] bg-black/95 flex flex-col items-center justify-center p-4">
+                    <div className="relative w-full max-w-4xl aspect-video bg-gray-900 rounded-3xl overflow-hidden shadow-2xl">
+                        <Cropper 
+                            image={src} 
+                            crop={crop} 
+                            zoom={zoom} 
+                            aspect={aspect} 
+                            onCropChange={setCrop} 
+                            onZoomChange={setZoom} 
+                            onCropComplete={(_, p) => setPixels(p)} 
+                        />
+                    </div>
+                    <div className="mt-8 bg-white p-6 rounded-[32px] flex items-center gap-6 shadow-xl w-full max-w-lg">
+                        <div className="flex-1 space-y-2">
+                            <div className="flex justify-between text-[10px] font-bold uppercase text-gray-400 tracking-widest">
+                                <span>Масштаб</span>
+                                <span>{Math.round(zoom * 100)}%</span>
+                            </div>
+                            <input 
+                                type="range" min="1" max="3" step="0.1" value={zoom} 
+                                onChange={(e) => setZoom(parseFloat(e.target.value))}
+                                className="w-full h-1.5 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={onCancel} className="p-4 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-colors">
+                                <X size={20} className="text-gray-500" />
+                            </button>
+                            <button 
+                                onClick={() => onCrop(pixels)} 
+                                className="px-8 py-4 bg-orange-600 text-white rounded-2xl font-bold uppercase text-xs tracking-widest shadow-lg shadow-orange-600/20"
+                            >
+                                Готово
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const PhotoInput = ({ label, value, onChange, icon: Icon, onCropTrigger, aspect }) => (
+            <div className="space-y-1.5">
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] ml-1">{label}</span>
+                <div className="relative aspect-video rounded-[24px] border-2 border-dashed border-gray-200 bg-white overflow-hidden group transition-all hover:border-orange-300">
+                    {value ? (
+                        <>
+                            <img src={value} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-3 transition-opacity backdrop-blur-sm">
+                                <button onClick={() => onCropTrigger(value, onChange, aspect)} className="p-3 bg-white rounded-full hover:scale-110 transition-transform">
+                                    <Scissors size={18} className="text-gray-900"/>
+                                </button>
+                                <button onClick={() => onChange(null)} className="p-3 bg-red-600 text-white rounded-full hover:scale-110 transition-transform">
+                                    <Trash2 size={18}/>
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <label className="flex flex-col items-center justify-center h-full cursor-pointer hover:bg-orange-50/50 transition-colors">
+                            <div className="w-12 h-12 bg-gray-50 rounded-2xl flex items-center justify-center mb-2 group-hover:bg-white shadow-sm transition-colors">
+                                <Icon size={24} className="text-gray-300 group-hover:text-orange-500 transition-colors" />
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Загрузить</span>
+                            <input type="file" className="hidden" accept="image/*" onChange={e => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                    const r = new FileReader();
+                                    r.onload = () => onCropTrigger(r.result, onChange, aspect);
+                                    r.readAsDataURL(file);
+                                }
+                            }} />
+                        </label>
+                    )}
+                </div>
+            </div>
+        );
+
+        const App = () => {
+            const [view, setView] = useState('UPLOAD'); // UPLOAD, EDIT, PREVIEW
+            const [loading, setLoading] = useState(false);
+            const [cropData, setCropData] = useState(null);
+            
+            // Данные
+            const [smetaFiles, setSmetaFiles] = useState([]);
+            const [meta, setMeta] = useState({ client: '', address: '', terms: '', notes: '' });
+            const [photos, setPhotos] = useState({ cover: null, fire: null, chimney: null, materials: [], labor: [], logistics: [] });
+            const [items, setItems] = useState([]);
+
+            const handleProcess = async () => {
+                setLoading(true);
+                try {
+                    const ai = new GoogleGenAI({ apiKey: window.process?.env?.API_KEY || '' });
+                    const parts = smetaFiles.map(f => f.text ? { text: f.text } : { inlineData: { mimeType: f.type, data: f.data.split(',')[1] }});
+                    
+                    const res = await ai.models.generateContent({
+                        model: 'gemini-3-flash-preview',
+                        contents: { parts: [...parts, { text: "Распознай смету. Категории: FIREPLACE, CHIMNEY, MATERIALS, LABOR, LOGISTICS. Верни только JSON с массивом items (name, quantity, unit, price, total, category)." }] },
+                        config: { responseMimeType: "application/json" }
+                    });
+
+                    const parsed = JSON.parse(res.text);
+                    setItems(parsed.items || []);
+                    setView('EDIT');
+                } catch (e) {
+                    console.error(e);
+                    alert('Ошибка при анализе: ' + e.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const addFile = async (e) => {
+                const files = Array.from(e.target.files || []);
+                for (const f of files) {
+                    const r = new FileReader();
+                    if (f.name.match(/\.(xlsx|xls)$/)) {
+                        r.onload = ev => {
+                            const wb = XLSX.read(new Uint8Array(ev.target.result), {type:'array'});
+                            const csv = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+                            setSmetaFiles(prev => [...prev, { name: f.name, text: csv }]);
+                        };
+                        r.readAsArrayBuffer(f);
+                    } else {
+                        r.onload = () => setSmetaFiles(prev => [...prev, { name: f.name, type: f.type, data: r.result }]);
+                        r.readAsDataURL(f);
+                    }
+                }
+            };
+
+            // ЭКРАН 1: ЗАГРУЗКА
+            if (view === 'UPLOAD') {
+                return (
+                    <div className="max-w-6xl mx-auto py-12 px-6">
+                        <header className="flex items-center gap-4 mb-12">
+                            <div className="bg-gray-900 p-3 rounded-2xl shadow-xl shadow-orange-500/20">
+                                <Flame className="text-orange-500 fill-orange-500" size={28}/>
+                            </div>
+                            <div>
+                                <h1 className="text-2xl font-black uppercase tracking-tight">Fireplace Pro</h1>
+                                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.3em]">Engine v2.5</p>
+                            </div>
+                        </header>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                            {/* Смета и Инфо */}
+                            <div className="space-y-8">
+                                <div className="bg-white p-10 rounded-[40px] shadow-sm border border-gray-100 space-y-6">
+                                    <h3 className="flex items-center gap-2 text-xs font-black uppercase text-orange-600 tracking-widest">
+                                        <UserCircle size={16}/> Информация
+                                    </h3>
+                                    <div className="space-y-4">
+                                        <input placeholder="Заказчик (ФИО)" value={meta.client} onChange={e => setMeta({...meta, client: e.target.value})} className="w-full bg-gray-50 p-5 rounded-[20px] outline-none focus:ring-2 ring-orange-100 transition-all font-medium" />
+                                        <input placeholder="Адрес объекта" value={meta.address} onChange={e => setMeta({...meta, address: e.target.value})} className="w-full bg-gray-50 p-5 rounded-[20px] outline-none focus:ring-2 ring-orange-100 transition-all font-medium" />
+                                    </div>
+                                </div>
+
+                                <div className="bg-gray-900 p-10 rounded-[40px] text-white shadow-2xl relative overflow-hidden group">
+                                    <div className="flex items-center gap-3 mb-8">
+                                        <div className="bg-orange-600 p-2.5 rounded-xl"><FileText size={20}/></div>
+                                        <h3 className="text-xs font-black uppercase tracking-widest">Сметная документация</h3>
+                                    </div>
+                                    <div className="space-y-4">
+                                        {smetaFiles.map((f, i) => (
+                                            <div key={i} className="flex justify-between items-center bg-white/10 p-4 rounded-2xl border border-white/5">
+                                                <span className="text-[11px] font-bold uppercase truncate max-w-[200px]">{f.name}</span>
+                                                <button onClick={() => setSmetaFiles(s => s.filter((_, idx) => idx !== i))} className="text-white/40 hover:text-red-400 transition-colors"><Trash2 size={16}/></button>
+                                            </div>
+                                        ))}
+                                        <label className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-white/10 rounded-3xl cursor-pointer hover:bg-white/5 transition-all">
+                                            <Upload className="text-orange-500 mb-3" size={32} />
+                                            <span className="text-[10px] font-bold uppercase tracking-widest text-white/30">Загрузить Excel / PDF</span>
+                                            <input type="file" multiple className="hidden" onChange={addFile} />
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Фотографии */}
+                            <div className="bg-white p-10 rounded-[40px] shadow-sm border border-gray-100 space-y-8">
+                                <h3 className="flex items-center gap-2 text-xs font-black uppercase text-orange-600 tracking-widest">
+                                    <Camera size={16}/> Визуализация
+                                </h3>
+                                <div className="grid grid-cols-1 gap-6">
+                                    <PhotoInput label="Главная обложка" icon={ImageIcon} aspect={16/9} value={photos.cover} onChange={v => setPhotos({...photos, cover: v})} onCropTrigger={(s, d, a) => setCropData({s, d, a})} />
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <PhotoInput label="Топка" icon={Flame} aspect={1/1} value={photos.fire} onChange={v => setPhotos({...photos, fire: v})} onCropTrigger={(s, d, a) => setCropData({s, d, a})} />
+                                        <PhotoInput label="Дымоход" icon={Ruler} aspect={1/1} value={photos.chimney} onChange={v => setPhotos({...photos, chimney: v})} onCropTrigger={(s, d, a) => setCropData({s, d, a})} />
+                                    </div>
+                                </div>
+                                <button 
+                                    onClick={handleProcess} 
+                                    disabled={loading || smetaFiles.length === 0} 
+                                    className="w-full py-6 bg-orange-600 text-white rounded-[24px] font-black uppercase tracking-widest disabled:opacity-30 shadow-xl shadow-orange-600/30 flex items-center justify-center gap-3 transition-all active:scale-95"
+                                >
+                                    {loading ? <div className="loader"></div> : <><Layout size={18}/> Создать коммерческое предложение</>}
+                                </button>
+                            </div>
+                        </div>
+
+                        <CropModal 
+                            isOpen={!!cropData} 
+                            src={cropData?.s} 
+                            aspect={cropData?.a}
+                            onCancel={() => setCropData(null)} 
+                            onCrop={async p => {
+                                const res = await getCroppedImg(cropData.s, p);
+                                cropData.d(res);
+                                setCropData(null);
+                            }} 
+                        />
+                    </div>
+                );
+            }
+
+            // ЭКРАН 2: РЕДАКТИРОВАНИЕ
+            if (view === 'EDIT') {
+                return (
+                    <div className="max-w-5xl mx-auto py-12 px-6 space-y-8">
+                        <div className="flex justify-between items-center bg-white p-6 rounded-[32px] shadow-sm border border-gray-100">
+                            <button onClick={() => setView('UPLOAD')} className="flex items-center gap-2 text-xs font-bold uppercase text-gray-400"><ArrowLeft size={16}/> Назад</button>
+                            <button onClick={() => setView('PREVIEW')} className="px-10 py-4 bg-gray-900 text-white rounded-2xl font-bold uppercase text-xs tracking-widest shadow-xl">Предпросмотр</button>
+                        </div>
+
+                        <div className="bg-white rounded-[40px] shadow-xl overflow-hidden border border-gray-100">
+                            <div className="bg-gray-900 p-8 text-white flex justify-between items-center">
+                                <div>
+                                    <h2 className="text-xl font-black uppercase tracking-tight">Редактор сметы</h2>
+                                    <p className="text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mt-1">Проверьте категории и цены</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-[10px] font-bold text-white/30 uppercase tracking-widest">Итого</p>
+                                    <p className="text-2xl font-black text-orange-500">{items.reduce((s,i) => s + i.total, 0).toLocaleString()} ₽</p>
+                                </div>
+                            </div>
+
+                            <div className="p-8 space-y-12">
+                                {Object.keys(CATEGORIES).map(catKey => {
+                                    const catItems = items.filter(i => i.category === catKey);
+                                    if (catItems.length === 0) return null;
+                                    return (
+                                        <div key={catKey} className="space-y-4">
+                                            <div className="flex items-center gap-3 border-b-2 border-gray-100 pb-3">
+                                                <div className={`p-2 bg-orange-50 text-orange-600 rounded-lg`}>
+                                                    {React.createElement(CATEGORIES[catKey].icon, { size: 18 })}
+                                                </div>
+                                                <h3 className="font-black uppercase text-xs tracking-widest">{CATEGORIES[catKey].label}</h3>
+                                            </div>
+                                            <div className="space-y-2">
+                                                {catItems.map((item, idx) => (
+                                                    <div key={idx} className="grid grid-cols-12 gap-4 items-center bg-gray-50/50 p-3 rounded-2xl hover:bg-gray-50 transition-colors">
+                                                        <input value={item.name} className="col-span-6 bg-transparent outline-none font-medium text-sm" />
+                                                        <div className="col-span-2 text-center text-xs font-bold text-gray-400">{item.quantity} {item.unit}</div>
+                                                        <div className="col-span-3 text-right font-black text-sm">{item.total.toLocaleString()} ₽</div>
+                                                        <button className="col-span-1 text-gray-200 hover:text-red-400"><Trash2 size={14}/></button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // ЭКРАН 3: ПРЕДПРОСМОТР (ПЕЧАТЬ)
+            if (view === 'PREVIEW') {
+                const total = items.reduce((s, i) => s + i.total, 0);
+                return (
+                    <div className="bg-gray-100 min-h-screen pb-20 print:bg-white">
+                        <div className="no-print bg-white/90 backdrop-blur-md p-6 sticky top-0 z-50 flex justify-between shadow-sm border-b border-gray-100">
+                            <button onClick={() => setView('EDIT')} className="flex items-center gap-2 text-xs font-bold uppercase text-gray-400"><ArrowLeft size={16}/> Назад к правкам</button>
+                            <button onClick={() => window.print()} className="px-12 py-4 bg-orange-600 text-white rounded-2xl font-bold uppercase text-xs tracking-widest flex items-center gap-2 shadow-xl shadow-orange-600/20"><Printer size={18}/> Печать / PDF</button>
+                        </div>
+
+                        <div className="max-w-[900px] mx-auto space-y-20 mt-10 print:m-0 print:p-0">
+                            {/* Титульник */}
+                            <div className="print-page bg-white p-20 min-h-[1100px] flex flex-col shadow-2xl relative overflow-hidden">
+                                <div className="absolute top-0 right-0 w-64 h-64 bg-orange-600/5 rounded-full -mr-32 -mt-32"></div>
+                                
+                                <div className="flex justify-between items-start mb-20 relative">
+                                    <div className="space-y-2">
+                                        <h1 className="text-4xl font-black uppercase tracking-tighter">Коммерческое предложение</h1>
+                                        <div className="h-1.5 w-24 bg-orange-600 rounded-full"></div>
+                                    </div>
+                                    <div className="text-right">
+                                        <p className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">Документ</p>
+                                        <p className="text-2xl font-black text-gray-100 tracking-tighter">№{Math.floor(Math.random()*10000)}</p>
+                                    </div>
+                                </div>
+
+                                {photos.cover && <img src={photos.cover} className="w-full aspect-video object-cover rounded-[48px] shadow-2xl mb-20" />}
+
+                                <div className="grid grid-cols-2 gap-20 mt-auto">
+                                    <div className="space-y-8">
+                                        <div><p className="text-[10px] uppercase font-bold text-gray-300 tracking-widest mb-1">Заказчик</p><p className="text-2xl font-black">{meta.client || 'Не указан'}</p></div>
+                                        <div><p className="text-[10px] uppercase font-bold text-gray-300 tracking-widest mb-1">Адрес объекта</p><p className="text-lg font-medium text-gray-600 leading-tight">{meta.address || 'Не указан'}</p></div>
+                                    </div>
+                                    <div className="text-right flex flex-col justify-end">
+                                        <p className="text-[10px] uppercase font-bold text-orange-400 tracking-widest mb-2">Общая стоимость</p>
+                                        <p className="text-5xl font-black text-gray-900 tracking-tighter">{total.toLocaleString()} ₽</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Детализация */}
+                            {Object.keys(CATEGORIES).map((catKey, idx) => {
+                                const catItems = items.filter(i => i.category === catKey);
+                                if (catItems.length === 0) return null;
+                                const catTotal = catItems.reduce((s,i) => s + i.total, 0);
+                                return (
+                                    <div key={catKey} className="print-page bg-white p-20 min-h-[1100px] flex flex-col shadow-2xl">
+                                        <div className="flex justify-between items-end mb-16 border-b-8 border-gray-900 pb-8">
+                                            <h2 className="text-5xl font-black uppercase tracking-tighter">{CATEGORIES[catKey].label}</h2>
+                                            <p className="text-7xl font-black text-gray-50 leading-none">0{idx + 2}</p>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-8 mb-16">
+                                            <div className="aspect-video bg-gray-50 rounded-[32px] overflow-hidden border border-gray-100 shadow-inner">
+                                                {catKey === 'FIREPLACE' && photos.fire ? <img src={photos.fire} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 uppercase font-black text-[10px]">Фото отсутствует</div>}
+                                            </div>
+                                            <div className="aspect-video bg-gray-50 rounded-[32px] overflow-hidden border border-gray-100 shadow-inner">
+                                                {catKey === 'CHIMNEY' && photos.chimney ? <img src={photos.chimney} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-gray-200 uppercase font-black text-[10px]">Чертеж отсутствует</div>}
+                                            </div>
+                                        </div>
+
+                                        <table className="w-full mb-10">
+                                            <thead>
+                                                <tr className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b-2 border-gray-100">
+                                                    <th className="py-4">Позиция</th>
+                                                    <th className="py-4 text-center">Кол-во</th>
+                                                    <th className="py-4 text-right">Сумма</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-50">
+                                                {catItems.map((it, i) => (
+                                                    <tr key={i}><td className="py-4 pr-6 text-sm font-medium leading-relaxed">{it.name}</td><td className="py-4 text-center text-sm font-bold text-gray-400 whitespace-nowrap">{it.quantity} {it.unit}</td><td className="py-4 text-right font-black text-sm whitespace-nowrap">{it.total.toLocaleString()} ₽</td></tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+
+                                        <div className="mt-auto pt-10 border-t-2 border-gray-900 flex justify-between items-baseline">
+                                            <span className="text-[10px] font-black uppercase text-orange-600 tracking-widest">Итого по разделу:</span>
+                                            <span className="text-3xl font-black tracking-tighter">{catTotal.toLocaleString()} ₽</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                );
+            }
+
+            return null;
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
